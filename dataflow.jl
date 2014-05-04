@@ -137,14 +137,14 @@ function max_fixed_point(P::Vector, a₁::AbstractValue)
                 pc´ = pc+1
                 if isa(Ipc, GotoIf)
                     l = Ipc.label
-                    if new > s[l]
+                    if !(new <= s[l])
                         push!(W, l)
-                        s[l] = new
+                        s[l] = join(s[l], new)
                     end
                 end
             end
-            if new > s[pc´]
-                s[pc´] = new
+            if !(new <= s[pc´])
+                s[pc´] = join(s[pc´], new)
                 pc = pc´
             else
                 pc = n+1
