@@ -15,7 +15,7 @@ immutable Num <: Exp
 end
 
 type Call <: Exp
-    head::Exp
+    head::Sym
     args::Vector{Exp}
 end
 
@@ -34,20 +34,12 @@ type GotoIf <: Stmt
 end
 
 type Ret <: Stmt
-    e::Exp
 end
 
 convert(::Type{Exp}, s::Symbol) = Sym(s)
 convert(::Type{Sym}, s::Symbol) = Sym(s)
 convert(::Type{Exp}, n::Int)    = Num(n)
 convert(::Type{Num}, n::Int)    = Num(n)
-
-prog1 =
-    {Assign(:x, 0),                      # 1
-     GotoIf(4, Call(:randbool, Exp[])),  # 2
-     Assign(:y, 1),                      # 3
-     Ret(Call(:pair, Exp[:x,:y]))        # 4
-     }
 
 
 # Part 2: lattices
@@ -77,24 +69,20 @@ const ⊥ = BotElement()
 show(io::IO, ::TopElement) = print(io, "⊤")
 show(io::IO, ::BotElement) = print(io, "⊥")
 
-join(x::LatticeElement, y::LatticeElement) = (x == y ? x : ⊤)
-meet(x::LatticeElement, y::LatticeElement) = (x == y ? x : ⊥)
-
 <=(::BotElement, ::TopElement) = true
 <=(::BotElement, ::LatticeElement) = true
 <=(::LatticeElement, ::TopElement) = true
 
-join(::BotElement, ::TopElement) = ⊤
-join(::TopElement, ::BotElement) = ⊤
-
-meet(::BotElement, ::TopElement) = ⊥
-meet(::TopElement, ::BotElement) = ⊥
+join(x::LatticeElement, y::LatticeElement) = (x <= y ? y : y <= x ? x : ⊤)
+meet(x::LatticeElement, y::LatticeElement) = (x <= y ? x : y <= x ? y : ⊥)
 
 # 2.2. flat lattice of variable definedness
 
 immutable IsDefined <: LatticeElement
     is::Bool
 end
+
+convert(::Type{IsDefined}, x::Num) = IsDefined(true)
 
 # Note: the above definitions are such that we get flat lattices
 # "for free" by wrapping any simple julia value in an immutable
@@ -119,7 +107,13 @@ join(X::AbstractValue, Y::AbstractValue) =
 <=(X::AbstractValue, Y::AbstractValue) = meet(X,Y)==X
 < (X::AbstractValue, Y::AbstractValue) = X!=Y && X<=Y
 
-function max_fixed_point(P::Vector, a₁::AbstractValue)
+immutable Env
+    locals::AbstractValue
+    funcs::Dict{Symbol,Function}
+end
+
+function max_fixed_point{T<:LatticeElement}(P::Vector, env::Env, L::Type{T})
+    a₁ = env.locals
     n = length(P)
     s = [ (Symbol=>LatticeElement)[ v => ⊥ for v in keys(a₁) ] for i = 1:n ]
     s[1] = a₁
@@ -130,7 +124,7 @@ function max_fixed_point(P::Vector, a₁::AbstractValue)
         while pc != n+1
             delete!(W, pc)
             Ipc = P[pc]
-            new = semantics(Ipc, s[pc])
+            new = semantics(Ipc, Env(s[pc], env.funcs), L)
             if isa(Ipc, Goto)
                 pc´ = Ipc.label
             else
@@ -143,7 +137,7 @@ function max_fixed_point(P::Vector, a₁::AbstractValue)
                     end
                 end
             end
-            if !(new <= s[pc´])
+            if pc´<=n && !(new <= s[pc´])
                 s[pc´] = join(s[pc´], new)
                 pc = pc´
             else
@@ -153,3 +147,46 @@ function max_fixed_point(P::Vector, a₁::AbstractValue)
     end
     s
 end
+
+semantics(x, e::Env, L) = e.locals
+
+function semantics(x::Assign, e::Env, L)
+    v = abstract_eval(x.rhs, e, L)
+    s = copy(e.locals)
+    s[x.lhs.name] = v
+    return s
+end
+
+abstract_eval(x::Sym, e::Env, L) = get(e.locals, x.name, ⊥)
+
+abstract_eval(x::Num, e::Env, L) = convert(L, x)
+
+function abstract_eval(x::Call, e::Env, L)
+    if !haskey(e.funcs, x.head.name)
+        return ⊥
+    end
+    args = map(a->abstract_eval(a, e, L), {x.args...})
+    if any(x->(x == ⊥), args)
+        return ⊥
+    end
+    e.funcs[x.head.name](args...)
+end
+
+
+# example problem
+
+prog1 = {Assign(:x, 0),                       # 1
+         GotoIf(5, Call(:randbool, Exp[])),   # 2
+         Assign(:y, 1),                       # 3
+         Goto(5),                             # 4
+         Assign(:z, Call(:pair, Exp[:x,:y])), # 5
+         Ret()}
+
+l = (Symbol=>LatticeElement)[:x => IsDefined(false),
+                             :y => IsDefined(false),
+                             :z => IsDefined(false)]
+
+funcs = [:randbool => (a...)->IsDefined(true),
+         :pair     => (a...)->IsDefined(true)]
+
+max_fixed_point(prog1, Env(l, funcs), IsDefined)
