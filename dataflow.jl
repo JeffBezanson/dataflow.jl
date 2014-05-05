@@ -2,9 +2,7 @@
 
 import Base: convert
 
-abstract Stmt
-
-abstract Exp <: Stmt
+abstract Exp
 
 immutable Sym <: Exp
     name::Symbol
@@ -18,6 +16,8 @@ type Call <: Exp
     head::Sym
     args::Vector{Exp}
 end
+
+abstract Stmt
 
 type Assign <: Stmt
     lhs::Sym
@@ -44,7 +44,7 @@ convert(::Type{Num}, n::Int)    = Num(n)
 
 # Part 2: lattices
 
-# 2.1. partial order, meet, join, top, bottom, and their identities
+# partial order, meet, join, top, bottom, and their identities
 
 import Base: <=, ==, <, show
 
@@ -60,7 +60,6 @@ abstract LatticeElement
 <(x::LatticeElement, y::LatticeElement) = x<=y && !(y<=x)
 
 immutable TopElement <: LatticeElement; end
-
 immutable BotElement <: LatticeElement; end
 
 const ⊤ = TopElement()
@@ -76,14 +75,6 @@ show(io::IO, ::BotElement) = print(io, "⊥")
 join(x::LatticeElement, y::LatticeElement) = (x <= y ? y : y <= x ? x : ⊤)
 meet(x::LatticeElement, y::LatticeElement) = (x <= y ? x : y <= x ? y : ⊥)
 
-# 2.2. flat lattice of variable definedness
-
-immutable IsDefined <: LatticeElement
-    is::Bool
-end
-
-convert(::Type{IsDefined}, x::Num) = IsDefined(true)
-
 # Note: the above definitions are such that we get flat lattices
 # "for free" by wrapping any simple julia value in an immutable
 # LatticeElement.
@@ -98,39 +89,35 @@ typealias AbstractValue Dict{Symbol,LatticeElement}
 # to values. meet and join operate elementwise, and from there we only
 # need equality on dictionaries to get <= and <.
 
-meet(X::AbstractValue, Y::AbstractValue) =
-    (Symbol=>LatticeElement)[ v => meet(X[v],Y[v]) for v in keys(X) ]
-
-join(X::AbstractValue, Y::AbstractValue) =
-    (Symbol=>LatticeElement)[ v => join(X[v],Y[v]) for v in keys(X) ]
+meet(X::AbstractValue, Y::AbstractValue) = [ v => meet(X[v],Y[v]) for v in keys(X) ]
+join(X::AbstractValue, Y::AbstractValue) = [ v => join(X[v],Y[v]) for v in keys(X) ]
 
 <=(X::AbstractValue, Y::AbstractValue) = meet(X,Y)==X
 < (X::AbstractValue, Y::AbstractValue) = X!=Y && X<=Y
 
-immutable Env
-    locals::AbstractValue
-    funcs::Dict{Symbol,Function}
-end
-
-function max_fixed_point{T<:LatticeElement}(P::Vector, env::Env, L::Type{T})
-    a₁ = env.locals
+function max_fixed_point(P::Vector, a₁::AbstractValue, eval)
     n = length(P)
-    s = [ (Symbol=>LatticeElement)[ v => ⊥ for v in keys(a₁) ] for i = 1:n ]
-    s[1] = a₁
+    bot = (Symbol=>LatticeElement)[ v => ⊥ for v in keys(a₁) ]
+    s = [ a₁; [ bot for i = 2:n ] ]
     W = IntSet(1)
 
     while !isempty(W)
         pc = first(W)
         while pc != n+1
             delete!(W, pc)
-            Ipc = P[pc]
-            new = semantics(Ipc, Env(s[pc], env.funcs), L)
-            if isa(Ipc, Goto)
-                pc´ = Ipc.label
+            I = P[pc]
+            new = s[pc]
+            if isa(I, Assign)
+                # for an assignment, outgoing value is different from incoming
+                new = copy(new)
+                new[I.lhs.name] = eval(I.rhs, new)
+            end
+            if isa(I, Goto)
+                pc´ = I.label
             else
                 pc´ = pc+1
-                if isa(Ipc, GotoIf)
-                    l = Ipc.label
+                if isa(I, GotoIf)
+                    l = I.label
                     if !(new <= s[l])
                         push!(W, l)
                         s[l] = join(s[l], new)
@@ -148,32 +135,27 @@ function max_fixed_point{T<:LatticeElement}(P::Vector, env::Env, L::Type{T})
     s
 end
 
-semantics(x, e::Env, L) = e.locals
 
-function semantics(x::Assign, e::Env, L)
-    v = abstract_eval(x.rhs, e, L)
-    s = copy(e.locals)
-    s[x.lhs.name] = v
-    return s
+# example problem - find uses of undefined variables
+
+# flat lattice of variable definedness
+
+immutable IsDefined <: LatticeElement
+    is::Bool
 end
 
-abstract_eval(x::Sym, e::Env, L) = get(e.locals, x.name, ⊥)
+const undef = IsDefined(false)
+const def   = IsDefined(true)
 
-abstract_eval(x::Num, e::Env, L) = convert(L, x)
+abstract_eval(x::Sym, s::AbstractValue) = get(s, x.name, ⊥)
 
-function abstract_eval(x::Call, e::Env, L)
-    if !haskey(e.funcs, x.head.name)
-        return ⊥
-    end
-    args = map(a->abstract_eval(a, e, L), {x.args...})
-    if any(x->(x == ⊥), args)
-        return ⊥
-    end
-    e.funcs[x.head.name](args...)
+abstract_eval(x::Num, s::AbstractValue) = def
+
+function abstract_eval(x::Call, s::AbstractValue)
+    args = map(a->abstract_eval(a, s), {x.args...})
+    any(x->x == ⊥, args) && return ⊥
+    return def
 end
-
-
-# example problem
 
 prog1 = {Assign(:x, 0),                       # 1
          GotoIf(5, Call(:randbool, Exp[])),   # 2
@@ -182,11 +164,7 @@ prog1 = {Assign(:x, 0),                       # 1
          Assign(:z, Call(:pair, Exp[:x,:y])), # 5
          Ret()}
 
-l = (Symbol=>LatticeElement)[:x => IsDefined(false),
-                             :y => IsDefined(false),
-                             :z => IsDefined(false)]
+# variables initially undefined
+l = (Symbol=>LatticeElement)[:x => undef, :y => undef, :z => undef]
 
-funcs = [:randbool => (a...)->IsDefined(true),
-         :pair     => (a...)->IsDefined(true)]
-
-max_fixed_point(prog1, Env(l, funcs), IsDefined)
+max_fixed_point(prog1, l, abstract_eval)
