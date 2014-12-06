@@ -72,8 +72,11 @@ show(io::IO, ::BotElement) = print(io, "⊥")
 <=(::BotElement, ::LatticeElement) = true
 <=(::LatticeElement, ::TopElement) = true
 
-join(x::LatticeElement, y::LatticeElement) = (x <= y ? y : y <= x ? x : ⊤)
-meet(x::LatticeElement, y::LatticeElement) = (x <= y ? x : y <= x ? y : ⊥)
+# join
+⊔(x::LatticeElement, y::LatticeElement) = (x <= y ? y : y <= x ? x : ⊤)
+
+# meet
+⊓(x::LatticeElement, y::LatticeElement) = (x <= y ? x : y <= x ? y : ⊥)
 
 # Note: the above definitions are such that we get flat lattices
 # "for free" by wrapping any simple julia value in an immutable
@@ -89,15 +92,15 @@ typealias AbstractValue Dict{Symbol,LatticeElement}
 # to values. meet and join operate elementwise, and from there we only
 # need equality on dictionaries to get <= and <.
 
-meet(X::AbstractValue, Y::AbstractValue) = [ v => meet(X[v],Y[v]) for v in keys(X) ]
-join(X::AbstractValue, Y::AbstractValue) = [ v => join(X[v],Y[v]) for v in keys(X) ]
+⊔(X::AbstractValue, Y::AbstractValue) = [ v => X[v] ⊔ Y[v] for v in keys(X) ]
+⊓(X::AbstractValue, Y::AbstractValue) = [ v => X[v] ⊓ Y[v] for v in keys(X) ]
 
-<=(X::AbstractValue, Y::AbstractValue) = meet(X,Y)==X
+<=(X::AbstractValue, Y::AbstractValue) = X⊓Y == X
 < (X::AbstractValue, Y::AbstractValue) = X!=Y && X<=Y
 
 function max_fixed_point(P::Vector, a₁::AbstractValue, eval)
     n = length(P)
-    bot = (Symbol=>LatticeElement)[ v => ⊥ for v in keys(a₁) ]
+    bot = AbstractValue([ v => ⊥ for v in keys(a₁) ])
     s = [ a₁; [ bot for i = 2:n ] ]
     W = IntSet(1)
 
@@ -120,12 +123,12 @@ function max_fixed_point(P::Vector, a₁::AbstractValue, eval)
                     l = I.label
                     if !(new <= s[l])
                         push!(W, l)
-                        s[l] = join(s[l], new)
+                        s[l] = s[l] ⊔ new
                     end
                 end
             end
             if pc´<=n && !(new <= s[pc´])
-                s[pc´] = join(s[pc´], new)
+                s[pc´] = s[pc´] ⊔ new
                 pc = pc´
             else
                 pc = n+1
@@ -152,19 +155,20 @@ abstract_eval(x::Sym, s::AbstractValue) = get(s, x.name, ⊥)
 abstract_eval(x::Num, s::AbstractValue) = def
 
 function abstract_eval(x::Call, s::AbstractValue)
-    args = map(a->abstract_eval(a, s), {x.args...})
-    any(x->x == ⊥, args) && return ⊥
+    if any(a->(abstract_eval(a,s) == ⊥), x.args)
+        return ⊥
+    end
     return def
 end
 
-prog1 = {Assign(:x, 0),                       # 1
+prog1 = [Assign(:x, 0),                       # 1
          GotoIf(5, Call(:randbool, Exp[])),   # 2
          Assign(:y, 1),                       # 3
          Goto(5),                             # 4
          Assign(:z, Call(:pair, Exp[:x,:y])), # 5
-         Ret()}
+         Ret()]
 
 # variables initially undefined
-l = (Symbol=>LatticeElement)[:x => undef, :y => undef, :z => undef]
+l = AbstractValue(:x => undef, :y => undef, :z => undef)
 
 max_fixed_point(prog1, l, abstract_eval)
