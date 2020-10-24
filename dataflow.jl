@@ -84,8 +84,7 @@ show(io::IO, ::BotElement) = print(io, "⊥")
 
 # Part 3: dataflow analysis
 
-# Note: the paper uses U+1D56E MATHEMATICAL BOLD FRAKTUR CAPITAL C for this
-typealias AbstractValue Dict{Symbol,LatticeElement}
+# Note: the paper (https://api.semanticscholar.org/CorpusID:28519618) uses U+1D56E MATHEMATICAL BOLD FRAKTUR CAPITAL C for this
 const AbstractValue = Dict{Symbol,LatticeElement}
 
 # Here we extend lattices of values to lattices of mappings of variables
@@ -146,6 +145,7 @@ end
 struct IsDefined <: LatticeElement
     is::Bool
 end
+show(io::IO, isdef::IsDefined) = print(io, isdef.is ? "defined" : "undefined")
 
 const undef = IsDefined(false)
 const def   = IsDefined(true)
