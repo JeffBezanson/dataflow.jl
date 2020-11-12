@@ -2,39 +2,38 @@
 
 import Base: convert
 
-abstract Exp
+abstract type Exp end
 
-immutable Sym <: Exp
+struct Sym <: Exp
     name::Symbol
 end
 
-immutable Num <: Exp
+struct Num <: Exp
     val::Int
 end
 
-type Call <: Exp
+struct Call <: Exp
     head::Sym
     args::Vector{Exp}
 end
 
-abstract Stmt
+abstract type Stmt end
 
-type Assign <: Stmt
+struct Assign <: Stmt
     lhs::Sym
     rhs::Exp
 end
 
-type Goto <: Stmt
+struct Goto <: Stmt
     label::Int
 end
 
-type GotoIf <: Stmt
+struct GotoIf <: Stmt
     label::Int
     cond::Exp
 end
 
-type Ret <: Stmt
-end
+struct Ret <: Stmt end
 
 convert(::Type{Exp}, s::Symbol) = Sym(s)
 convert(::Type{Sym}, s::Symbol) = Sym(s)
@@ -48,7 +47,7 @@ convert(::Type{Num}, n::Int)    = Num(n)
 
 import Base: <=, ==, <, show
 
-abstract LatticeElement
+abstract type LatticeElement end
 
 # Note: == and < are defined such that future LatticeElements only
 # need to implement <=
@@ -59,8 +58,8 @@ abstract LatticeElement
 
 <(x::LatticeElement, y::LatticeElement) = x<=y && !(y<=x)
 
-immutable TopElement <: LatticeElement; end
-immutable BotElement <: LatticeElement; end
+struct TopElement <: LatticeElement end
+struct BotElement <: LatticeElement end
 
 const ⊤ = TopElement()
 const ⊥ = BotElement()
@@ -85,24 +84,24 @@ show(io::IO, ::BotElement) = print(io, "⊥")
 
 # Part 3: dataflow analysis
 
-# Note: the paper uses U+1D56E MATHEMATICAL BOLD FRAKTUR CAPITAL C for this
-typealias AbstractValue Dict{Symbol,LatticeElement}
+# Note: the paper (https://api.semanticscholar.org/CorpusID:28519618) uses U+1D56E MATHEMATICAL BOLD FRAKTUR CAPITAL C for this
+const AbstractValue = Dict{Symbol,LatticeElement}
 
 # Here we extend lattices of values to lattices of mappings of variables
 # to values. meet and join operate elementwise, and from there we only
 # need equality on dictionaries to get <= and <.
 
-⊔(X::AbstractValue, Y::AbstractValue) = [ v => X[v] ⊔ Y[v] for v in keys(X) ]
-⊓(X::AbstractValue, Y::AbstractValue) = [ v => X[v] ⊓ Y[v] for v in keys(X) ]
+⊔(X::AbstractValue, Y::AbstractValue) = AbstractValue( v => X[v] ⊔ Y[v] for v in keys(X) )
+⊓(X::AbstractValue, Y::AbstractValue) = AbstractValue( v => X[v] ⊓ Y[v] for v in keys(X) )
 
 <=(X::AbstractValue, Y::AbstractValue) = X⊓Y == X
-< (X::AbstractValue, Y::AbstractValue) = X!=Y && X<=Y
+<(X::AbstractValue, Y::AbstractValue)  = X<=Y && X!=Y
 
-function max_fixed_point(P::Vector, a₁::AbstractValue, eval)
+function max_fixed_point(P::Program, a₁::AbstractValue, eval) where {Program<:AbstractVector{Stmt}}
     n = length(P)
-    bot = AbstractValue([ v => ⊥ for v in keys(a₁) ])
+    bot = AbstractValue( v => ⊥ for v in keys(a₁) )
     s = [ a₁; [ bot for i = 2:n ] ]
-    W = IntSet(1)
+    W = BitSet(1)
 
     while !isempty(W)
         pc = first(W)
@@ -143,9 +142,10 @@ end
 
 # flat lattice of variable definedness
 
-immutable IsDefined <: LatticeElement
+struct IsDefined <: LatticeElement
     is::Bool
 end
+show(io::IO, isdef::IsDefined) = print(io, isdef.is ? "defined" : "undefined")
 
 const undef = IsDefined(false)
 const def   = IsDefined(true)
